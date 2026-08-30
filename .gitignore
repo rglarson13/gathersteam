@@ -1,0 +1,14 @@
+# Secrets: Steam API key and Steam ID
+.env
+
+# Sources, state and caches: your library export, triage decisions, API caches.
+data/
+
+# Everything derived from data/. Safe to delete; rebuilt by the pipeline.
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
