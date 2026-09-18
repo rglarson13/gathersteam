@@ -4,6 +4,11 @@
 # Sources, state and caches: your library export, triage decisions, API caches.
 data/
 
+# Launcher databases copied from Epic / GOG Galaxy installs. Large (GOG's is
+# ~110MB, over GitHub's 100MB file limit), and they hold account-linked local
+# state. Copy your own in; never commit them.
+input/
+
 # Everything derived from data/. Safe to delete; rebuilt by the pipeline.
 output/
 

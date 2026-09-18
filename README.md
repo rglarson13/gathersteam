@@ -254,6 +254,9 @@ itself neutralises the exact tags that define it.
 | `data/steam_library.csv` | Raw export: every owned game, playtime, achievements |
 | `data/triage.json` | **Every judgement you have made.** Back this up. |
 | `data/manual_additions.csv` | Hand-added off-Steam games |
+| `data/platform_links.json` | Confirmed/rejected cross-platform title matches |
+| `output/unified_library.csv` | Every game, deduplicated across platforms |
+| `output/platform_match_review.csv` | Uncertain cross-platform matches awaiting your call |
 | `data/*_cache.json` | API caches — hours of fetching, do not delete casually |
 | `output/steam_recommendation_input.csv` | The played list: what counts as yours |
 | `output/steam_not_played.csv` | Everything excluded, with reasons |
@@ -268,6 +271,64 @@ itself neutralises the exact tags that define it.
 delete it and the four-command pipeline rebuilds it in seconds.
 
 Both are gitignored: they describe one person's library in detail.
+
+---
+
+## Cross-platform: seeing everything you own
+
+Steam is one library among several. `unify.py` merges every platform you have
+an exporter for into one canonical registry, matching the same game across
+platforms by title even when nothing else lines up (no shared ID exists
+between Steam, Epic and GOG).
+
+```bash
+python3 export_epic.py     # -> output/epic_games.csv
+python3 export_gog.py      # -> output/gog_games.csv
+python3 unify.py           # merge everything -> output/unified_library.csv
+```
+
+Matching has three tiers: identical normalized titles merge automatically;
+very close titles (fuzzy ratio >= 0.93) also auto-merge; anything closer than
+that but not certain goes to a review queue instead of guessing.
+
+```bash
+python3 unify.py --review
+```
+
+y = same game, n = different games, s = skip, q = quit. Answers are remembered
+in `data/platform_links.json`, so a title is only ever asked about once, even
+across future reruns after adding more platforms.
+
+**Adding a new platform** (Ubisoft, EA, Blizzard, or a hand-typed PS/Switch
+export): write an exporter that produces a CSV with a title column and ideally
+a stable id column, then add one entry to the `SOURCES` dict at the top of
+`unify.py`. Nothing else needs to change.
+
+### Before you buy something
+
+```bash
+python3 own.py "elden ring"
+python3 own.py "hollow knight" "witcher 3"
+```
+
+Searches the unified registry and tells you which platform(s) you already own
+a game on, with hours and last-played where available, so you do not
+accidentally rebuy something on Steam that you already have on GOG.
+
+### What this does not do yet
+
+The taste profile and recommender (`weights.py`, `recommend.py`) are still
+Steam-only: they need tags, and tag lookup currently goes through Steam's own
+APIs by AppID. A GOG- or Epic-only game has no AppID to look up. Getting
+recommendations to genuinely span platforms means either resolving non-Steam
+titles to a Steam AppID where one exists (many indie/AA titles are on both),
+or adding a platform-agnostic tag source (IGDB). Not built yet - flag it if
+you want to prioritize it.
+
+In the meantime, a high-value real number a game already played on GOG/Epic
+*can* still enter the taste profile the same way console hours do: add it to
+`data/manual_additions.csv` with a Steam AppID (the game only needs to exist
+on Steam, not be owned there) and real hours/dates from the unified registry.
 
 ---
 
