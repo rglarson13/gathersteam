@@ -14,9 +14,11 @@ one repo.
    platforms later). It exists so you can ask "do I already own this?" before
    buying a game again on a different store.
 
-These two things are related but separate: the recommender does not (yet) see
-Epic or GOG games, and the ownership registry does not (yet) feed the taste
-profile. See "What this does not do yet" further down for the actual state.
+These two used to be fully separate; they are now linked one direction: a
+game you played on GOG (real hours) or own on GOG/Epic (unplayed) can feed the
+Steam-based recommender via `resolve_steam_ids.py`, which borrows tag data
+from a matching Steam listing. See "Recommendations across platforms" further
+down for what that can and cannot do.
 
 If none of that means anything, skim "How it decides things" near the bottom -
 it explains the reasoning, not just the commands.
@@ -42,7 +44,17 @@ python3 own.py "game name"      # instant, uses whatever unify.py last built
 python3 unify.py                # rerun after any fresh export (see below)
 ```
 
-These two workflows are independent - running one does not update the other.
+**Pull GOG/Epic games into the taste profile and recommendations:**
+
+```bash
+python3 resolve_steam_ids.py && python3 build_backlog.py
+python3 build_reclist.py && python3 enrich.py && python3 weights.py
+python3 enrich.py --input output/steam_backlog_candidates.csv \
+                   --out output/steam_backlog_enriched.csv
+python3 recommend.py
+```
+
+Run `unify.py` before any of these three - each reads what it built.
 
 ---
 
@@ -278,9 +290,15 @@ itself neutralises the exact tags that define it.
 | `data/steam_library.csv` | Raw export: every owned game, playtime, achievements |
 | `data/triage.json` | **Every judgement you have made.** Back this up. |
 | `data/manual_additions.csv` | Hand-added off-Steam games |
+| `input/*_manual_list.txt` | Hand-typed title lists per platform (EA, Ubisoft, ...) - gitignored |
 | `data/platform_links.json` | Confirmed/rejected cross-platform title matches |
 | `output/unified_library.csv` | Every game, deduplicated across platforms |
 | `output/platform_match_review.csv` | Uncertain cross-platform matches awaiting your call |
+| `data/steam_id_resolutions.json` | Non-Steam titles resolved to a Steam AppID for tag lookup |
+| `data/steam_applist_cache.json` | Steam's full app catalog, cached (large, ~few MB) |
+| `data/cross_platform_played.csv` | Auto-generated: GOG games with real hours, feeding the profile |
+| `output/cross_platform_ambiguous.csv` | Titles matching 2+ Steam apps - needs a manual `--set` |
+| `output/cross_platform_unresolved.csv` | Titles with no Steam listing at all - can never be scored |
 | `data/*_cache.json` | API caches — hours of fetching, do not delete casually |
 | `output/steam_recommendation_input.csv` | The played list: what counts as yours |
 | `output/steam_not_played.csv` | Everything excluded, with reasons |
@@ -323,10 +341,32 @@ y = same game, n = different games, s = skip, q = quit. Answers are remembered
 in `data/platform_links.json`, so a title is only ever asked about once, even
 across future reruns after adding more platforms.
 
-**Adding a new platform** (Ubisoft, EA, Blizzard, or a hand-typed PS/Switch
-export): write an exporter that produces a CSV with a title column and ideally
+**Adding a platform with no exporter** (EA, Ubisoft, Battle.net, PS4/5,
+Switch...): type the titles into a plain-text file, one per line, at
+`input/<platform>_manual_list.txt` - e.g. `ea_manual_list.txt`,
+`battle-net_manual_list.txt`, `ps5_manual_list.txt`. `unify.py` picks up every
+file matching that pattern automatically; the platform name comes from the
+filename (`ea` -> EA, `battle-net` -> Battle.net, `switch` -> Switch; anything
+else is title-cased). Blank lines and lines starting with `#` are ignored, and
+typos are harmless-ish - a misspelled title just fails to match anything and
+shows up as its own game, so check `output/cross_platform_unresolved.csv` for
+titles that look like they should have matched.
+
+Such lists carry **no hours**, so every game on them counts as owned-but-unplayed
+and becomes a recommendation candidate. If you *have* played one (say 1,000
+hours of Overwatch), add a row to `data/manual_additions.csv` with its Steam
+AppID and real hours - see "Games Steam does not know about" above. That entry
+outranks the auto-generated ones, so it wins.
+
+**Adding a platform that has a real exporter** (a database or cache you can
+parse): write an exporter that produces a CSV with a title column and ideally
 a stable id column, then add one entry to the `SOURCES` dict at the top of
 `unify.py`. Nothing else needs to change.
+
+Two games are only ever asked about in `unify.py --review` if they sit on
+*different* platforms. Two similar titles on the **same** platform (Battlefield
+3 and Battlefield 4) are two things you own there, not a duplicate, so they are
+never queued.
 
 ### Before you buy something
 
@@ -339,25 +379,76 @@ Searches the unified registry and tells you which platform(s) you already own
 a game on, with hours and last-played where available, so you do not
 accidentally rebuy something on Steam that you already have on GOG.
 
-### What this does not do yet
+### Recommendations across platforms
 
-The taste profile and recommender (`weights.py`, `recommend.py`) are still
-Steam-only: they need tags, and tag lookup currently goes through Steam's own
-APIs by AppID. A GOG- or Epic-only game has no AppID to look up. Getting
-recommendations to genuinely span platforms means either resolving non-Steam
-titles to a Steam AppID where one exists (many indie/AA titles are on both),
-or adding a platform-agnostic tag source (IGDB). Not built yet - flag it if
-you want to prioritize it.
+The recommender needs tags, and tag lookup goes through Steam's own APIs by
+AppID - a GOG- or Epic-only game has no AppID to look up. `resolve_steam_ids.py`
+closes most of that gap: it matches non-Steam titles against Steam's full
+catalog (a quarter million apps) by EXACT normalized title only - no fuzzy
+matching here, since guessing wrong would quietly attach the wrong game's tags
+to your real playtime rather than just looking odd.
 
-In the meantime, a high-value real number a game already played on GOG/Epic
-*can* still enter the taste profile the same way console hours do: add it to
-`data/manual_additions.csv` with a Steam AppID (the game only needs to exist
-on Steam, not be owned there) and real hours/dates from the unified registry.
+```bash
+python3 resolve_steam_ids.py
+```
+
+A resolved AppID does **not** mean you own the game on Steam - it means a
+Steam listing exists that tag data can be borrowed from. This unlocks two
+things automatically:
+
+- **GOG games you already played** (real hours, e.g. 355 hours of GWENT that
+  had never shown up anywhere before this) flow into the taste profile the
+  same way a `manual_additions.csv` entry does - no per-game hand-editing
+  needed anymore for anything with a resolvable AppID.
+- **GOG/Epic games you own but have not played** become recommendation
+  candidates alongside your Steam backlog, once you rebuild it:
+
+```bash
+python3 build_backlog.py     # candidates from Steam + resolved GOG/Epic
+python3 enrich.py --input output/steam_backlog_candidates.csv \
+                   --out output/steam_backlog_enriched.csv
+python3 recommend.py
+```
+
+**What still cannot work:** a true platform exclusive with no Steam listing at
+all has no tags to score against - it lands in
+`output/cross_platform_unresolved.csv` and stays out of both the profile and
+the recommendations. Some titles resolve to more than one Steam AppID (a
+demo, a delisted duplicate, an unrelated game with an identical name) and are
+listed in `output/cross_platform_ambiguous.csv` instead of guessed at - fix
+one with `python3 resolve_steam_ids.py --set "Title" <appid>`.
+
+**Epic has no playtime data at all** (the catalog cache is a list of what you
+own, not a play tracker), so an Epic game can only ever become a
+recommendation candidate, never a taste-profile input - there is no hours
+number to build one from.
+
+If two entries under different AppIDs turn out to be the same game double-
+counted (this happened once: a VR edition next to the base game),
+`resolve_steam_ids.py` warns about it by title closeness against
+`manual_additions.csv` rather than silently merging or duplicating. Reject the
+one that should not count, then rerun the resolver:
+
+```bash
+python3 resolve_steam_ids.py --reject "The duplicate title"
+python3 resolve_steam_ids.py
+```
+
+`data/cross_platform_played.csv` is regenerated on every run, so never edit it
+by hand - the edit would be silently overwritten. If the duplicate shares an
+AppID with an entry in `manual_additions.csv`, `build_reclist.py` already
+drops it automatically and there is nothing to do.
 
 ---
 
 ## Gotchas
 
+- **`build_reclist.py` dedupes by AppID across sources, last-priority-wins.**
+  Native Steam data beats `manual_additions.csv`, which beats
+  `cross_platform_played.csv`. If the same real-world game ends up under two
+  *different* AppIDs (a VR edition, a demo), that is not caught automatically
+  - `resolve_steam_ids.py` warns about title closeness, but you decide which
+  one to `--reject`.
 - **Rerun the whole pipeline.** `weights.py` reads what `enrich.py` wrote, which
   reads what `build_reclist.py` wrote. Skipping a step silently uses stale data.
 - **`--family` writes to `recommendations_family.csv`.** Passing `--out` to one
@@ -396,6 +487,19 @@ python3 unify.py --review  # if it reports uncertain matches, resolve them
 `data/platform_links.json` persists your match decisions, so this only ever
 asks about genuinely new ambiguity - new games, or a newly-added platform.
 
+**Fold GOG/Epic into the taste profile and recommendations** (run after the
+above, whenever you want GOG/Epic ownership reflected in what gets suggested):
+
+```bash
+python3 resolve_steam_ids.py
+python3 build_reclist.py && python3 enrich.py && python3 weights.py
+python3 build_backlog.py
+python3 enrich.py --input output/steam_backlog_candidates.csv \
+                   --out output/steam_backlog_enriched.csv
+python3 recommend.py
+```
+
 **If you only remember one thing:** run the four-command Steam pipeline for
-recommendations, run `unify.py` before trusting `own.py`'s answer, and read
+recommendations, run `unify.py` before trusting `own.py`'s answer, run
+`resolve_steam_ids.py` before either of those to fold GOG/Epic in, and read
 the top of this file if you have forgotten why any of this exists.

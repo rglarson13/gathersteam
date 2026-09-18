@@ -70,11 +70,12 @@ def load_lib():
     with open(LIB, encoding="utf-8") as f:
         lib = list(csv.DictReader(f))
     # Games played off-Steam (GOG, console) live here so they can be marked too.
-    try:
-        with open(os.path.join(DATA, "manual_additions.csv"), encoding="utf-8") as f:
-            lib += list(csv.DictReader(f))
-    except OSError:
-        pass
+    for name in ("manual_additions.csv", "cross_platform_played.csv"):
+        try:
+            with open(os.path.join(DATA, name), encoding="utf-8") as f:
+                lib += list(csv.DictReader(f))
+        except OSError:
+            pass
     return lib
 
 

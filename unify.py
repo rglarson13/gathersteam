@@ -8,6 +8,12 @@ of them, normalizes titles, and groups rows that are the same game. Adding a
 new platform later (Ubisoft, EA, Blizzard, a PS/Switch export you type by
 hand) means adding one entry to SOURCES below - nothing else changes.
 
+Platforms with no exporter can skip even that: drop a plain-text list, one
+title per line, at input/<platform>_manual_list.txt (e.g. ea_manual_list.txt,
+battle-net_manual_list.txt) and it is picked up automatically. Blank lines
+and lines starting with # are ignored. Such lists carry no hours or IDs, so
+those games count as owned-but-unplayed unless you say otherwise.
+
 Matching has three tiers:
   exact    normalized titles are identical               -> auto-merged
   strong   very close (fuzzy ratio >= STRONG)             -> auto-merged
@@ -66,6 +72,42 @@ def norm(title):
     t = re.sub(EDITION_WORDS, " ", t)
     t = re.sub(r"[^a-z0-9 ]", " ", t)
     return " ".join(t.split())
+
+
+INPUT = os.path.join(HERE, "input")
+MANUAL_SUFFIX = "_manual_list.txt"
+# Filename stem -> display name, where title-casing the stem would be wrong.
+PLATFORM_NAMES = {"ea": "EA", "battle-net": "Battle.net", "battlenet": "Battle.net",
+                  "gog": "GOG", "ps4": "PS4", "ps5": "PS5", "psn": "PSN",
+                  "switch": "Switch", "nintendo-switch": "Switch", "xbox": "Xbox"}
+
+
+def manual_list_sources():
+    """platform display name -> path, for every input/*_manual_list.txt."""
+    found = {}
+    try:
+        files = sorted(os.listdir(INPUT))
+    except OSError:
+        return found
+    for fn in files:
+        if not fn.endswith(MANUAL_SUFFIX):
+            continue
+        stem = fn[:-len(MANUAL_SUFFIX)].lower()
+        name = PLATFORM_NAMES.get(stem, stem.replace("-", " ").replace("_", " ").title())
+        found[name] = os.path.join(INPUT, fn)
+    return found
+
+
+def load_manual_list(name, path):
+    out = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            title = line.strip()
+            if not title or title.startswith("#"):
+                continue
+            out.append({"platform": name, "title": title, "key": norm(title),
+                        "id": "", "hours": "", "last_played": ""})
+    return out
 
 
 def load_source(name, cfg):
@@ -144,6 +186,14 @@ def build_groups(entries, links):
             if find(i) == find(j):
                 continue
             ratio = difflib.SequenceMatcher(None, ka, kb).ratio()
+            # If both titles appear on a common platform, you own them there as
+            # two distinct items (sequels, editions), so they cannot be one
+            # game and are never worth asking about. Exact-key merges above
+            # still collapse true same-platform duplicates.
+            plats_a = {entries[x]["platform"] for x in by_key[ka]}
+            plats_b = {entries[x]["platform"] for x in by_key[kb]}
+            if plats_a & plats_b:
+                continue
             pk = pair_key(entries[i], entries[j])
             if pk in links["rejected"]:
                 continue
@@ -244,6 +294,10 @@ def main():
     counts = {}
     for name, cfg in SOURCES.items():
         rows = load_source(name, cfg)
+        counts[name] = len(rows)
+        entries.extend(rows)
+    for name, path in manual_list_sources().items():
+        rows = load_manual_list(name, path)
         counts[name] = len(rows)
         entries.extend(rows)
 
