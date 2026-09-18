@@ -1,16 +1,31 @@
 # gathersteam
 
-Export your Steam library, work out what you *actually* like, and get
-recommendations from the games you already own.
+**If you have forgotten what this is:** it is two small tools that live in this
+one repo.
 
-Steam knows how many hours you played. It does not know that 3,000 of them were
-one game you play with friends, that your kids used your account, that you 100%ed
-Dark Souls on a PS3, or that you love Metroidvanias. This fixes that, then uses
-the corrected picture to rank your unplayed backlog.
+1. **A taste profiler and recommender**, built on your Steam library. Steam
+   knows how many hours you played, but not that 3,000 of them were one game
+   you play with friends and not your real taste, that your kids used your
+   account, that you 100%ed Dark Souls on a PS3, or that you love
+   Metroidvanias. You spent a long time correcting that picture by hand
+   (`mark.py`), and it is used to rank your *unplayed Steam backlog* so you can
+   find something worth playing next.
+2. **A cross-platform ownership registry**, covering Steam + Epic + GOG (more
+   platforms later). It exists so you can ask "do I already own this?" before
+   buying a game again on a different store.
+
+These two things are related but separate: the recommender does not (yet) see
+Epic or GOG games, and the ownership registry does not (yet) feed the taste
+profile. See "What this does not do yet" further down for the actual state.
+
+If none of that means anything, skim "How it decides things" near the bottom -
+it explains the reasoning, not just the commands.
 
 ---
 
 ## TL;DR — I just want to run it again
+
+**Update your taste profile and get Steam recommendations:**
 
 ```bash
 python3 build_reclist.py && python3 enrich.py && python3 weights.py && python3 recommend.py
@@ -19,6 +34,15 @@ python3 build_reclist.py && python3 enrich.py && python3 weights.py && python3 r
 **Run those four in that order after any change.** Everything is cached, so it
 takes seconds. If output looks stale, you skipped a step — most likely `enrich.py`,
 which is what feeds tags to `weights.py`.
+
+**Check whether you already own a game, or refresh the cross-platform list:**
+
+```bash
+python3 own.py "game name"      # instant, uses whatever unify.py last built
+python3 unify.py                # rerun after any fresh export (see below)
+```
+
+These two workflows are independent - running one does not update the other.
 
 ---
 
@@ -350,6 +374,8 @@ on Steam, not be owned there) and real hours/dates from the unified registry.
 
 ## Refreshing later
 
+**Steam taste profile and recommendations:**
+
 ```bash
 python3 gathersteam.py                       # pick up new games and playtime
 python3 build_reclist.py && python3 enrich.py && python3 weights.py && python3 recommend.py
@@ -357,3 +383,19 @@ python3 build_reclist.py && python3 enrich.py && python3 weights.py && python3 r
 
 `data/triage.json` persists, so every judgement you have made survives. Only
 genuinely new games need fetching.
+
+**Cross-platform ownership (Steam + Epic + GOG):**
+
+```bash
+python3 export_epic.py     # re-scrape the Epic catalog cache
+python3 export_gog.py      # re-scrape the GOG Galaxy database
+python3 unify.py           # re-merge everything -> output/unified_library.csv
+python3 unify.py --review  # if it reports uncertain matches, resolve them
+```
+
+`data/platform_links.json` persists your match decisions, so this only ever
+asks about genuinely new ambiguity - new games, or a newly-added platform.
+
+**If you only remember one thing:** run the four-command Steam pipeline for
+recommendations, run `unify.py` before trusting `own.py`'s answer, and read
+the top of this file if you have forgotten why any of this exists.
