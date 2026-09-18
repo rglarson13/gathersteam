@@ -1,5 +1,17 @@
-# Secrets: Steam API key and Steam ID
+# Secrets: Steam API key and Steam ID. Also catches .env.bak, .env.local, etc.
 .env
+.env.*
+!.env.example
+
+# Launcher databases/caches by TYPE, not just by folder: GOG Galaxy's database
+# contains clientSecret values, so it must never be committed even if copied
+# somewhere other than input/.
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*catcache*.bin
 
 # Sources, state and caches: your library export, triage decisions, API caches.
 data/
