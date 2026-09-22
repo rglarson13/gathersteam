@@ -8,11 +8,12 @@ of them, normalizes titles, and groups rows that are the same game. Adding a
 new platform later (Ubisoft, EA, Blizzard, a PS/Switch export you type by
 hand) means adding one entry to SOURCES below - nothing else changes.
 
-Platforms with no exporter can skip even that: drop a plain-text list, one
-title per line, at input/<platform>_manual_list.txt (e.g. ea_manual_list.txt,
-battle-net_manual_list.txt) and it is picked up automatically. Blank lines
-and lines starting with # are ignored. Such lists carry no hours or IDs, so
-those games count as owned-but-unplayed unless you say otherwise.
+Platforms with no exporter can skip even that: drop a list at
+input/<platform>_manual_list.txt (one title per line) or .csv (a title column,
+plus optional content_type / recommendation_eligible filters and a ps_plus
+column) and it is picked up automatically. In .txt files, blank lines and lines
+starting with # are ignored. Such lists carry no hours or IDs, so those games
+count as owned-but-unplayed unless you say otherwise.
 
 Matching has three tiers:
   exact    normalized titles are identical               -> auto-merged
@@ -75,38 +76,103 @@ def norm(title):
 
 
 INPUT = os.path.join(HERE, "input")
-MANUAL_SUFFIX = "_manual_list.txt"
+MANUAL_SUFFIXES = ("_manual_list.txt", "_manual_list.csv")
 # Filename stem -> display name, where title-casing the stem would be wrong.
+# PS4 and PS5 share one library, so they share one platform.
 PLATFORM_NAMES = {"ea": "EA", "battle-net": "Battle.net", "battlenet": "Battle.net",
-                  "gog": "GOG", "ps4": "PS4", "ps5": "PS5", "psn": "PSN",
-                  "switch": "Switch", "nintendo-switch": "Switch", "xbox": "Xbox"}
+                  "gog": "GOG", "ps": "PlayStation", "ps4": "PlayStation",
+                  "ps5": "PlayStation", "psn": "PlayStation",
+                  "playstation": "PlayStation", "switch": "Switch",
+                  "nintendo-switch": "Switch", "xbox": "Xbox"}
+TITLE_COLUMNS = ("title", "name", "game")
+# Warnings collected while loading, printed once by main().
+SKIPPED_NOTES = []
+
+
+def split_stem(stem):
+    """'ps4-physical' -> ('PlayStation', 'physical (PS4)'): the part before a
+    '-' is matched against known platforms first, so a finer split (PS4 vs
+    PS5, physical vs digital) still merges into the one platform it belongs
+    to, with the distinction kept as a note instead of lost or turned into a
+    whole separate platform."""
+    parts = stem.split("-", 1)
+    key = parts[0]
+    if key in PLATFORM_NAMES:
+        name = PLATFORM_NAMES[key]
+        modifier = parts[1].replace("-", " ") if len(parts) > 1 else ""
+        # Distinguish PS4 vs PS5 (etc.) once several such stems share one
+        # platform name; a bare "switch" stem needs no such tag.
+        tag = f" ({key.upper()})" if key != name.lower() else ""
+        return name, (modifier + tag).strip()
+    if stem in PLATFORM_NAMES:
+        return PLATFORM_NAMES[stem], ""
+    return stem.replace("-", " ").replace("_", " ").title(), ""
 
 
 def manual_list_sources():
-    """platform display name -> path, for every input/*_manual_list.txt."""
+    """platform display name -> [(path, note)], for every
+    input/*_manual_list.(txt|csv)."""
     found = {}
     try:
         files = sorted(os.listdir(INPUT))
     except OSError:
         return found
     for fn in files:
-        if not fn.endswith(MANUAL_SUFFIX):
+        suffix = next((x for x in MANUAL_SUFFIXES if fn.endswith(x)), None)
+        if not suffix:
             continue
-        stem = fn[:-len(MANUAL_SUFFIX)].lower()
-        name = PLATFORM_NAMES.get(stem, stem.replace("-", " ").replace("_", " ").title())
-        found[name] = os.path.join(INPUT, fn)
+        stem = fn[:-len(suffix)].lower()
+        name, note = split_stem(stem)
+        found.setdefault(name, []).append((os.path.join(INPUT, fn), note))
     return found
 
 
-def load_manual_list(name, path):
-    out = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            title = line.strip()
-            if not title or title.startswith("#"):
+def _entry(name, title, note=""):
+    return {"platform": name, "title": title, "key": norm(title),
+            "id": "", "hours": "", "last_played": "", "note": note}
+
+
+def load_manual_list(name, path, base_note=""):
+    """One title per line (.txt), or a CSV with a title column (.csv).
+
+    CSVs may carry their own filters, which are honoured so demos and test
+    builds never count as games you own: a content_type other than "game", or
+    recommendation_eligible = false, skips the row. A ps_plus column becomes a
+    note, since a subscription title is not the same as one you bought.
+    base_note comes from the filename (e.g. "physical (PS4)") and is combined
+    with any note the row itself carries.
+    """
+    def combine(*parts):
+        return ", ".join(p for p in parts if p)
+
+    if not path.endswith(".csv"):
+        with open(path, encoding="utf-8-sig") as f:
+            return [_entry(name, t, base_note) for t in (ln.strip() for ln in f)
+                    if t and not t.startswith("#")]
+    out, skipped = [], 0
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        cols = {c.lower().strip(): c for c in (reader.fieldnames or [])}
+        title_col = next((cols[c] for c in TITLE_COLUMNS if c in cols), None)
+        if not title_col:
+            SKIPPED_NOTES.append(f"{os.path.basename(path)}: no title/name/game column - ignored")
+            return []
+        for row in reader:
+            r = {k.lower().strip(): (v or "").strip() for k, v in row.items() if k}
+            title = r.get(title_col.lower().strip(), "")
+            if not title:
                 continue
-            out.append({"platform": name, "title": title, "key": norm(title),
-                        "id": "", "hours": "", "last_played": ""})
+            if r.get("content_type", "game").lower() not in ("game", ""):
+                skipped += 1
+                continue
+            if r.get("recommendation_eligible", "true").lower() in ("false", "0", "no"):
+                skipped += 1
+                continue
+            plus = r.get("ps_plus", "").lower() in ("yes", "mixed", "true")
+            out.append(_entry(name, title, combine(base_note, "PS Plus" if plus else "")))
+    if skipped:
+        SKIPPED_NOTES.append(f"{os.path.basename(path)}: skipped {skipped} non-game row(s) "
+                             f"(demos, test builds, apps)")
     return out
 
 
@@ -221,14 +287,16 @@ def best_date(vals):
 def write_unified(groups):
     platform_names = list(SOURCES)
     cols = ["Title", "Platforms"] + [f"{p} ID" for p in platform_names] + \
-           ["Hours Played", "Last Played"]
+           ["Hours Played", "Last Played", "Notes"]
     rows = []
     for g in groups:
         title = max(g, key=lambda e: len(e["title"]))["title"]  # fullest title wins
         plats = sorted({e["platform"] for e in g})
         row = {"Title": title, "Platforms": "; ".join(plats),
                "Hours Played": best_hours(e["hours"] for e in g),
-               "Last Played": best_date(e["last_played"] for e in g)}
+               "Last Played": best_date(e["last_played"] for e in g),
+               "Notes": "; ".join(sorted({f'{e["platform"]}: {e["note"]}'
+                                          for e in g if e.get("note")}))}
         for p in platform_names:
             ids = [e["id"] for e in g if e["platform"] == p and e["id"]]
             row[f"{p} ID"] = "; ".join(ids)
@@ -296,10 +364,11 @@ def main():
         rows = load_source(name, cfg)
         counts[name] = len(rows)
         entries.extend(rows)
-    for name, path in manual_list_sources().items():
-        rows = load_manual_list(name, path)
-        counts[name] = len(rows)
-        entries.extend(rows)
+    for name, sources in manual_list_sources().items():
+        for path, note in sources:
+            rows = load_manual_list(name, path, note)
+            counts[name] = counts.get(name, 0) + len(rows)
+            entries.extend(rows)
 
     groups, pending = build_groups(entries, links)
     rows = write_unified(groups)
@@ -307,6 +376,8 @@ def main():
 
     multi = sum(1 for r in rows if ";" in r["Platforms"])
     print("Loaded: " + ", ".join(f"{n} {c}" for n, c in counts.items() if c))
+    for note in SKIPPED_NOTES:
+        print(f"  ({note})")
     print(f"{len(rows)} unique games -> {os.path.relpath(OUT_UNIFIED, HERE)}")
     print(f"  {multi} owned on more than one platform")
     if pending:

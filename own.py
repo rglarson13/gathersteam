@@ -54,7 +54,8 @@ def main():
             plats = r["Platforms"]
             hrs = f', {r["Hours Played"]}h' if r["Hours Played"] else ""
             last = f', last played {r["Last Played"]}' if r["Last Played"] else ""
-            print(f'  OWNED on {plats}  ->  {r["Title"]}{hrs}{last}')
+            notes = f'  [{r["Notes"]}]' if r.get("Notes") else ""
+            print(f'  OWNED on {plats}  ->  {r["Title"]}{hrs}{last}{notes}')
 
 
 if __name__ == "__main__":

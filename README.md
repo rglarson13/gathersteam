@@ -56,6 +56,14 @@ python3 recommend.py
 
 Run `unify.py` before any of these three - each reads what it built.
 
+**Tell it about games you played on other stores (hours, opinions):**
+
+```bash
+python3 add_played.py
+```
+
+It asks questions and rebuilds everything at the end.
+
 ---
 
 ## Setup
@@ -183,6 +191,10 @@ always see what the data said before you weighed in.
 
 ## Games Steam does not know about
 
+**Easiest route: `python3 add_played.py`** (see "Recording games you played
+elsewhere" below) - it asks the questions and writes this file for you. The
+manual format below is still valid if you prefer it.
+
 For anything played on GOG, console, or another account, add a row to
 `data/manual_additions.csv`:
 
@@ -194,6 +206,42 @@ The Witcher 3: Wild Hunt,292030,120,2015-05-18,62,78,79
 Find the AppID from its Steam store URL — the game only has to *exist* on Steam,
 you do not need to own it there. `Last Played` matters: leave it blank and the
 game sits at a recency floor of 0.35.
+
+---
+
+## Recording games you played elsewhere
+
+`python3 add_played.py` walks you through the games on your EA / Ubisoft /
+Battle.net / etc. lists and asks about each one. You never edit a CSV.
+
+```bash
+python3 add_played.py                      # walk every game you haven't answered yet
+python3 add_played.py --game "Overwatch"   # just one game, by name
+python3 add_played.py --platform GOG       # walk a specific store instead
+python3 add_played.py --redo               # go back over games you already answered
+python3 add_played.py --rebuild            # apply saved answers to your recommendations
+```
+
+For each game it asks **whether you played it**, and only if so: roughly how many
+hours, when you last played, and how you felt about it (loved / meh). **Every
+answer except "played it?" is optional - press Enter to skip.** If you do not
+know the hours it offers a rough-size menu (barely tried ~1h ... hundreds of
+hours ~200h), and if you skip that too it counts the game as a light ~5 hour
+estimate, marked `estimated` in the file, rather than inventing precision.
+Hours are log-scaled downstream, so being off by a factor of two barely matters.
+
+Dates can be a year (`2019`), a year-month (`2019-05`) or a full date. If a game
+has no automatic Steam match, it searches Steam by name and lets you pick the
+right listing. If there truly is none (Diablo, StarCraft, Hearthstone), it
+notes that you played it, but with no Steam listing there are no tags to score,
+so it cannot influence recommendations - you will not be asked again.
+
+Answers are remembered, so rerunning only asks about what you have not answered.
+Quit any time with `q`; progress is kept. At the end it offers to rebuild your
+profile and recommendations for you - just press Enter.
+
+To fix a wrong answer later, `python3 add_played.py --game "Name"` overwrites it.
+`mark.py --hours` also still works on these games.
 
 ---
 
@@ -235,6 +283,7 @@ game best. A tag you have no history with counts as **neutral, not negative**.
 
 **Reading the score:** 1.0 is "typical of your library". Roughly, `>=1.2` is top
 10%, `>=1.3` top 5%, `>=1.5` top 1%. Below ~1.1 is noise. Every row carries a
+`Source` column (which store you own it on: Steam, GOG, Epic, EA, ...) and a
 `Why` column naming the tags that earned the score — check it. A game that scored
 well on tags you do not care about is a bad match, not a discovery.
 
@@ -289,8 +338,8 @@ itself neutralises the exact tags that define it.
 | `.env` | Your API key and Steam ID. Never commit. |
 | `data/steam_library.csv` | Raw export: every owned game, playtime, achievements |
 | `data/triage.json` | **Every judgement you have made.** Back this up. |
-| `data/manual_additions.csv` | Hand-added off-Steam games |
-| `input/*_manual_list.txt` | Hand-typed title lists per platform (EA, Ubisoft, ...) - gitignored |
+| `data/manual_additions.csv` | Games played off-Steam. Managed by `add_played.py` - hand-editing still works |
+| `input/*_manual_list.(txt\|csv)` | Title lists per platform (EA, Ubisoft, PlayStation, ...) - gitignored |
 | `data/platform_links.json` | Confirmed/rejected cross-platform title matches |
 | `output/unified_library.csv` | Every game, deduplicated across platforms |
 | `output/platform_match_review.csv` | Uncertain cross-platform matches awaiting your call |
@@ -341,22 +390,40 @@ y = same game, n = different games, s = skip, q = quit. Answers are remembered
 in `data/platform_links.json`, so a title is only ever asked about once, even
 across future reruns after adding more platforms.
 
-**Adding a platform with no exporter** (EA, Ubisoft, Battle.net, PS4/5,
-Switch...): type the titles into a plain-text file, one per line, at
-`input/<platform>_manual_list.txt` - e.g. `ea_manual_list.txt`,
-`battle-net_manual_list.txt`, `ps5_manual_list.txt`. `unify.py` picks up every
-file matching that pattern automatically; the platform name comes from the
-filename (`ea` -> EA, `battle-net` -> Battle.net, `switch` -> Switch; anything
-else is title-cased). Blank lines and lines starting with `#` are ignored, and
-typos are harmless-ish - a misspelled title just fails to match anything and
+**Adding a platform with no exporter** (EA, Ubisoft, Battle.net, PlayStation,
+Switch...): drop a list in `input/` named `<platform>_manual_list.txt` or
+`<platform>_manual_list.csv` - e.g. `ea_manual_list.txt`, `ps5_manual_list.csv`,
+`switch_manual_list.txt`. `unify.py` picks up every file matching that pattern
+automatically; the platform name comes from the filename (`ea` -> EA,
+`battle-net` -> Battle.net, `switch` -> Switch, `ps4`/`ps5`/`psn` -> PlayStation,
+since PS4 and PS5 share one library; anything else is title-cased).
+
+A filename can carry an extra `-suffix` that does not create a new platform:
+`ps4-physical_manual_list.txt` and `switch-digital_manual_list.txt` both still
+merge into PlayStation and Switch, with the suffix kept as a note instead
+(`own.py` then shows `[PlayStation: physical (PS4)]`). This is how a physical
+copy and a digital library for the same console end up as one platform rather
+than four.
+
+- **`.txt`:** one title per line. Blank lines and lines starting with `#` are
+  ignored.
+- **`.csv`:** needs a `title` (or `name` / `game`) column; other columns are
+  optional. If a `content_type` column exists, any row that is not `game` is
+  skipped, and rows with `recommendation_eligible` = false are skipped too, so
+  demos, test builds and apps never count as games you own. A `ps_plus` column
+  (yes / mixed) is kept as a note - `own.py` then shows `[PlayStation: PS Plus]`,
+  because a game you can play through a subscription is not the same as one you
+  bought. It cannot tell whether a PS Plus title is currently claimed, so treat
+  that note as "available to you", not "yours forever".
+
+Typos are harmless-ish - a misspelled title just fails to match anything and
 shows up as its own game, so check `output/cross_platform_unresolved.csv` for
 titles that look like they should have matched.
 
 Such lists carry **no hours**, so every game on them counts as owned-but-unplayed
-and becomes a recommendation candidate. If you *have* played one (say 1,000
-hours of Overwatch), add a row to `data/manual_additions.csv` with its Steam
-AppID and real hours - see "Games Steam does not know about" above. That entry
-outranks the auto-generated ones, so it wins.
+and becomes a recommendation candidate. To tell it which ones you have actually
+played, run `python3 add_played.py` - see "Recording games you played elsewhere"
+below. No CSV editing needed.
 
 **Adding a platform that has a real exporter** (a database or cache you can
 parse): write an exporter that produces a CSV with a title column and ideally

@@ -119,7 +119,7 @@ def main():
         scored.append(r)
 
     scored.sort(key=lambda r: -num(r["Score"]))
-    cols = ["Game", "AppID", "Score", "Matched Tags", "Why", "Metacritic",
+    cols = ["Game", "Source", "AppID", "Score", "Matched Tags", "Why", "Metacritic",
             "Release Date", "Tags", "Genres", "Developer"]
     with open(out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, cols, extrasaction="ignore")
@@ -131,7 +131,8 @@ def main():
           f"({len(prof)} tags) -> {os.path.basename(out)}\n")
     for r in scored[:args.top]:
         mc = f' MC{r["Metacritic"]}' if r.get("Metacritic") else ""
-        print(f'  {r["Score"]}  {r["Game"][:38]:40}{mc}')
+        own = f' [{r["Source"]}]' if r.get("Source") else ""
+        print(f'  {r["Score"]}  {r["Game"][:38]:40}{mc}{own}')
         print(f'          {r["Why"]}')
 
 
